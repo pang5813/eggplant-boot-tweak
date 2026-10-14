@@ -1,0 +1,10 @@
+.theos/
+.theos-toolchain/
+packages/
+.build-metadata/
+package-check/
+.DS_Store
+*.dSYM/
+*.o
+*.deb
+boot_policy_test

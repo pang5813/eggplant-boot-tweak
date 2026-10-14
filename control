@@ -1,0 +1,9 @@
+Package: com.attacker.eggplantboot
+Name: Eggplant Boot
+Version: 1.0.36
+Architecture: iphoneos-arm64e
+Description: App-scoped boot date adjustment for Eggplant on Dopamine RootHide.
+Maintainer: pang5813
+Author: pang5813
+Section: Tweaks
+Depends: mobilesubstrate, firmware (>= 15.0)

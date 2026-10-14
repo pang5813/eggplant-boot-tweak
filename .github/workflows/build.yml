@@ -1,0 +1,118 @@
+name: Build RootHide deb
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roothide-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  THEOS_COMMIT: cfba89a53a05b4a1b822121158acc3669c20602f
+  THEOS: ${{ github.workspace }}/.theos-toolchain
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          brew install make ldid xz dpkg
+          xcode-select -p
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Install pinned official RootHide Theos
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/roothide/theos.git "$THEOS"
+          git -C "$THEOS" checkout --detach "$THEOS_COMMIT"
+          git -C "$THEOS" submodule update --init --recursive
+          test "$(git -C "$THEOS" rev-parse HEAD)" = "$THEOS_COMMIT"
+
+      - name: Run boot policy unit tests
+        run: |
+          set -euo pipefail
+          test_binary="$RUNNER_TEMP/eggplant_boot_policy_test"
+          cc -std=c11 -D_DARWIN_C_SOURCE -Wall -Wextra -Werror \
+            BootPolicy.c tests/boot_policy_test.c -o "$test_binary"
+          "$test_binary"
+
+      - name: Build RootHide package
+        run: |
+          set -euo pipefail
+          gmake clean
+          gmake package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide
+
+      - name: Verify package and record metadata
+        run: |
+          set -euo pipefail
+          mkdir -p .build-metadata
+          debs=(packages/*.deb)
+          test "${#debs[@]}" -eq 1
+          deb="${debs[0]}"
+          test -f "$deb"
+          test "$(dpkg-deb -f "$deb" Package)" = com.attacker.eggplantboot
+          test "$(dpkg-deb -f "$deb" Architecture)" = iphoneos-arm64e
+          case "$(dpkg-deb -f "$deb" Version)" in
+            1.0.36|1.0.36-*) ;;
+            *) echo 'Unexpected package version' >&2; exit 1 ;;
+          esac
+          dpkg-deb -I "$deb" > .build-metadata/control.txt
+          dpkg-deb -c "$deb" > .build-metadata/package-contents.txt
+          extract_dir="$RUNNER_TEMP/eggplant-boot-package-check"
+          mkdir -p "$extract_dir"
+          dpkg-deb -x "$deb" "$extract_dir"
+          test ! -e "$extract_dir/var/jb"
+          dylib="$extract_dir/usr/lib/TweakInject/EggplantBootTweak.dylib"
+          filter="$extract_dir/usr/lib/TweakInject/EggplantBootTweak.plist"
+          test -f "$dylib"
+          test -f "$filter"
+          plutil -lint "$filter"
+          xcrun lipo -verify_arch arm64 arm64e "$dylib"
+          xcrun lipo -info "$dylib" > .build-metadata/macho-architectures.txt
+          xcrun otool -arch all -L "$dylib" > .build-metadata/macho-dependencies.txt
+          grep -F '@loader_path/.jbroot/usr/lib/libsubstrate.dylib' .build-metadata/macho-dependencies.txt
+          if grep -F '/var/jb' .build-metadata/macho-dependencies.txt; then
+            echo 'Ordinary Rootless dependency found in RootHide package' >&2
+            exit 1
+          fi
+          shasum -a 256 "$deb" > .build-metadata/SHA256SUMS.txt
+          {
+            printf 'Source commit: '
+            git rev-parse HEAD
+            printf 'RootHide Theos commit: %s\n' "$THEOS_COMMIT"
+            printf 'GitHub run: https://github.com/%s/actions/runs/%s\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            xcodebuild -version
+            xcrun --sdk iphoneos --show-sdk-version
+            gmake --version
+            dpkg-deb --version
+          } > .build-metadata/build-environment.txt
+          cat .build-metadata/control.txt
+          cat .build-metadata/macho-architectures.txt
+          cat .build-metadata/macho-dependencies.txt
+          cat .build-metadata/SHA256SUMS.txt
+
+      - name: Upload deb and build metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: EggplantBoot-1.0.36-RootHide
+          path: |
+            packages/*.deb
+            .build-metadata/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
