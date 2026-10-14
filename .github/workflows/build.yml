@@ -82,7 +82,7 @@ jobs:
           test -f "$dylib"
           test -f "$filter"
           plutil -lint "$filter"
-          xcrun lipo -verify_arch arm64 arm64e "$dylib"
+          xcrun lipo "$dylib" -verify_arch arm64 arm64e
           xcrun lipo -info "$dylib" > .build-metadata/macho-architectures.txt
           xcrun otool -arch all -L "$dylib" > .build-metadata/macho-dependencies.txt
           grep -F '@loader_path/.jbroot/usr/lib/libsubstrate.dylib' .build-metadata/macho-dependencies.txt
