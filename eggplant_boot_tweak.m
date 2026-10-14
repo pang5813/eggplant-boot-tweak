@@ -25,6 +25,7 @@ static BTSysctlFunction g_original_sysctl;
 static BTByNameFunction g_original_byname;
 static uintptr_t g_main_text_start;
 static uintptr_t g_main_text_end;
+static uint32_t g_main_image_index;
 static int64_t g_delta;
 static struct timeval g_original_boot;
 static time_t g_shifted_boot;
@@ -34,21 +35,33 @@ static _Atomic uint64_t g_byname_changes;
 static _Thread_local unsigned g_depth;
 static char g_log_path[1024];
 
-static bool BTMainExecutable(void) {
-    const char *path = _dyld_get_image_name(0);
-    if (!path) return false;
-    const char *base = strrchr(path, '/');
-    return strcmp(base ? base + 1 : path, "Eggplant") == 0;
-}
-
 static bool BTFindMainText(void) {
-    const struct mach_header_64 *header = (const void *)_dyld_get_image_header(0);
-    if (!header || header->magic != MH_MAGIC_64) return false;
-    intptr_t slide = _dyld_get_image_vmaddr_slide(0);
+    // RootHide can put systemhook ahead of the executable in dyld's list.
+    // Locate the actual MH_EXECUTE image instead of assuming image zero.
+    const struct mach_header_64 *header = NULL;
+    intptr_t slide = 0;
+    uint32_t image_count = _dyld_image_count();
+    for (uint32_t index = 0; index < image_count; ++index) {
+        const struct mach_header_64 *candidate =
+            (const void *)_dyld_get_image_header(index);
+        const char *path = _dyld_get_image_name(index);
+        if (!candidate || candidate->magic != MH_MAGIC_64 ||
+            candidate->filetype != MH_EXECUTE || !path) continue;
+        const char *base = strrchr(path, '/');
+        if (strcmp(base ? base + 1 : path, "Eggplant") != 0) continue;
+        header = candidate;
+        slide = _dyld_get_image_vmaddr_slide(index);
+        g_main_image_index = index;
+        break;
+    }
+    if (!header) return false;
     const uint8_t *cursor = (const uint8_t *)(header + 1);
+    const uint8_t *commands_end = cursor + header->sizeofcmds;
     for (uint32_t index = 0; index < header->ncmds; ++index) {
+        if ((size_t)(commands_end - cursor) < sizeof(struct load_command)) return false;
         const struct load_command *command = (const void *)cursor;
-        if (command->cmdsize < sizeof(*command)) return false;
+        if (command->cmdsize < sizeof(*command) ||
+            command->cmdsize > (size_t)(commands_end - cursor)) return false;
         if (command->cmd == LC_SEGMENT_64 && command->cmdsize >= sizeof(struct segment_command_64)) {
             const struct segment_command_64 *segment = (const void *)cursor;
             if (strncmp(segment->segname, "__TEXT", sizeof(segment->segname)) == 0) {
@@ -122,14 +135,16 @@ static void BTLogSnapshot(void) {
     FILE *file = fopen(temporary, "w");
     if (!file) return;
     fprintf(file,
-        "EggplantBoot stability build 1.0.36\n"
+        "EggplantBoot stability build 1.0.37\n"
         "scope=Eggplant main executable boot-date queries only\n"
+        "main_image_index=%u\n"
         "ready=%d\noriginal_boot_sec=%lld\nshifted_boot_sec=%lld\n"
         "shift_seconds=%lld\ncalendar=UTC, three months, clamp month end\n"
         "sysctl_changed=%llu\nsysctlbyname_changed=%llu\n"
         "global_syscall_hook=disabled\nscheduling_clock_hooks=disabled\n"
         "systemUptime_hook=disabled\nfile_timestamp_hooks=disabled\n"
         "private_direct_svc=not intercepted\n",
+        g_main_image_index,
         atomic_load_explicit(&g_ready, memory_order_acquire) ? 1 : 0,
         (long long)g_original_boot.tv_sec, (long long)g_shifted_boot,
         (long long)g_delta,
@@ -154,7 +169,7 @@ __attribute__((constructor))
 static void BTInitialize(void) {
     int entry_errno = errno;
     @autoreleasepool {
-        if (!BTMainExecutable() || !BTFindMainText()) return;
+        if (!BTFindMainText()) { errno = entry_errno; return; }
         const char *home = getenv("HOME");
         if (home && home[0]) {
             int size = snprintf(g_log_path, sizeof(g_log_path),
