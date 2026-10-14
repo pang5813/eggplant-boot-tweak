@@ -10,7 +10,7 @@
 
 在独立仓库 `pang5813/eggplant-boot-tweak` 的 Actions 中运行 **Build RootHide deb**。工作流使用 macOS 15 与原生 Xcode SDK，克隆官方 [RootHide Theos](https://github.com/roothide/theos)，固定提交 `cfba89a53a05b4a1b822121158acc3669c20602f`（2026-10-15 查询的 master HEAD），同时锁定该提交记录的子模块版本。
 
-工作流先执行 `BootPolicy.c` 的原生单元测试，再打包和核对包 ID、版本、架构、文件路径与动态库依赖。构建成功后下载 **EggplantBoot-1.0.37-RootHide** artifact，里面包含 `.deb`、SHA-256、编译环境及 Mach-O 检查结果。
+工作流先执行 `BootPolicy.c` 的原生单元测试，以及直接引用实际插件实现的主镜像识别回归测试（覆盖 RootHide 的镜像顺序），再打包和核对包 ID、版本、架构、文件路径与动态库依赖。构建成功后下载 **EggplantBoot-1.0.37-RootHide** artifact，里面包含 `.deb`、SHA-256、编译环境及 Mach-O 检查结果。
 
 本包使用 `THEOS_PACKAGE_SCHEME=roothide`，deb 架构标记为 `iphoneos-arm64e`；沿用手机旧包的 `usr/lib/TweakInject/EggplantBootTweak.dylib` 与同名 plist，由 RootHide 安装到随机 bootstrap 根目录。不要手动加 `/var/jb` 前缀。详见 [RootHide 官方开发说明](https://github.com/roothide/Developer)。
 

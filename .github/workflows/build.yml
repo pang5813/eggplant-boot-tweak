@@ -51,6 +51,18 @@ jobs:
             BootPolicy.c tests/boot_policy_test.c -o "$test_binary"
           "$test_binary"
 
+      - name: Test RootHide main image discovery
+        run: |
+          set -euo pipefail
+          policy_object="$RUNNER_TEMP/boot_policy.o"
+          test_binary="$RUNNER_TEMP/eggplant_main_image_test"
+          cc -std=c11 -D_DARWIN_C_SOURCE -Wall -Wextra -Werror \
+            -c BootPolicy.c -o "$policy_object"
+          clang -std=c11 -D_DARWIN_C_SOURCE -fobjc-arc -Wall -Wextra -Werror \
+            -I tests/stubs -framework Foundation \
+            tests/main_image_test.m "$policy_object" -o "$test_binary"
+          "$test_binary"
+
       - name: Build RootHide package
         run: |
           set -euo pipefail
